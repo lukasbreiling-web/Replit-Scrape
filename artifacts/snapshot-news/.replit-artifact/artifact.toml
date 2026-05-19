@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Snapshot News Aggregator"
+version = "1.0.0"
+id = "artifacts/snapshot-news"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24788
+
+[services.development]
+run = "pnpm --filter @workspace/snapshot-news run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/snapshot-news", "run", "build" ]
+publicDir = "artifacts/snapshot-news/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24788"
+BASE_PATH = "/"

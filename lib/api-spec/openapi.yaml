@@ -3,20 +3,21 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Snapshot News Aggregator API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: articles
+    description: Article operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +25,73 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /articles:
+    get:
+      operationId: listArticles
+      tags: [articles]
+      summary: List all cached articles sorted by fetched_at descending
+      responses:
+        "200":
+          description: List of articles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Article"
+
+  /articles/fetch:
+    post:
+      operationId: fetchArticles
+      tags: [articles]
+      summary: Trigger purge + RSS scrape, return updated article list
+      responses:
+        "200":
+          description: Updated article list after fetch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FetchResult"
+
+  /articles/{id}/toggle-save:
+    post:
+      operationId: toggleSave
+      tags: [articles]
+      summary: Toggle the is_saved flag for an article
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated article
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Article"
+        "404":
+          description: Article not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /articles/stats:
+    get:
+      operationId: getArticleStats
+      tags: [articles]
+      summary: Summary stats (total, saved, temporary, expiring soon)
+      responses:
+        "200":
+          description: Article statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArticleStats"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +102,71 @@ components:
       required:
         - status
 
+    Article:
+      type: object
+      required:
+        - id
+        - headline
+        - publisher
+        - url
+        - fetchedAt
+        - isSaved
+      properties:
+        id:
+          type: integer
+        headline:
+          type: string
+        publisher:
+          type: string
+        url:
+          type: string
+        cachePath:
+          type: ["string", "null"]
+        cacheFilename:
+          type: ["string", "null"]
+        fetchedAt:
+          type: string
+          format: date-time
+        isSaved:
+          type: boolean
+
+    FetchResult:
+      type: object
+      required:
+        - articles
+        - newCount
+        - purgedCount
+      properties:
+        articles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Article"
+        newCount:
+          type: integer
+        purgedCount:
+          type: integer
+
+    ArticleStats:
+      type: object
+      required:
+        - total
+        - saved
+        - temporary
+        - expiringSoon
+      properties:
+        total:
+          type: integer
+        saved:
+          type: integer
+        temporary:
+          type: integer
+        expiringSoon:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string

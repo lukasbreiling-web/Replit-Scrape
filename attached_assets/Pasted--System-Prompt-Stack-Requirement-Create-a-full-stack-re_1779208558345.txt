@@ -1,0 +1,65 @@
+### System Prompt & Stack Requirement
+Create a full-stack, responsive web application on Replit. 
+- **Backend:** Python using FastAPI (for native async support during scraping) and Uvicorn.
+- **Database:** SQLite (via standard `sqlite3` or `SQLAlchemy`).
+- **Frontend:** Vanilla JS, HTML5, and Tailwind CSS (via CDN for zero-setup UI styling).
+- **Libraries allowed:** `httpx` or `requests` (for fetching), `beautifulsoup4` (for basic HTML parsing), and `feedparser` (if using RSS).
+
+---
+
+### Core Architecture & Logic Details
+
+#### 1. Database Schema (`news.db`)
+Create an `articles` table with the following fields:
+- `id`: INTEGER PRIMARY KEY AUTOINCREMENT
+- `headline`: TEXT
+- `publisher`: TEXT
+- `url`: TEXT UNIQUE
+- `cache_path`: TEXT (Local file path to the saved HTML)
+- `fetched_at`: TIMESTAMP (Defaults to current time)
+- `is_saved`: BOOLEAN (Defaults to 0 / False)
+
+#### 2. News Fetching & Resilient Scraping Engine
+Implement a backend module that runs on app startup and via a manual UI refresh button.
+- **Sources:** Use 3 stable RSS feeds to guarantee data (e.g., BBC Top Stories: `http://feeds.bbci.co.uk/news/rss.xml`, Hacker News: `https://news.ycombinator.com/rss`, Reuters: `https://www.reutersagency.com/feed/`). RSS feeds provide clean URLs and titles, avoiding fragile HTML scraping for headlines.
+- **Caching Mechanism:** For each new URL found in the feed:
+  1. Make an HTTP request fetching the raw HTML. Use a realistic `User-Agent` header to prevent 403 errors.
+  2. Save the raw text into a local directory named `cached_articles/` using a sanitized version of the article title or a UUID as the filename (e.g., `cached_articles/abc-123.html`).
+  3. If a specific URL fails to fetch or times out, catch the exception, log it to the console, and gracefully `continue` to the next article without crashing the loop.
+
+#### 3. 3-Day Auto-Purge Logic
+Every time the fetching function is triggered, execute a cleanup routine right before fetching new data:
+- Query the database for records where `fetched_at` is older than 3 days AND `is_saved` is equal to `0` (False).
+- For each matching record:
+  1. Programmatically delete the local file using `os.remove(cache_path)` (handle `FileNotFoundError` gracefully if the file was already deleted).
+  2. Delete the row from the SQLite database.
+
+#### 4. Backend API Endpoints (FastAPI)
+- `GET /`: Serves the primary `index.html` frontend dashboard.
+- `GET /api/articles`: Returns a JSON list of all cached articles, sorted by `fetched_at` descending.
+- `POST /api/fetch`: Triggers the purge routine + fetches fresh articles, then returns the updated list.
+- `POST /api/articles/{id}/toggle-save`: Toggles the `is_saved` boolean in the database for the given article ID.
+- `GET /cached_articles/{filename}`: Static file routing to serve the raw, cached HTML files directly to the browser.
+
+---
+
+### Frontend UI & Interaction Requirements
+
+Build a single-page style interface using a clean, modern Tailwind CSS layout (Deep gray/white slate theme). 
+
+#### UI Layout
+- **Header:** Title ("Snapshot News Aggregator"), a "Refresh/Scrape News" button with a loading spinner state, and a quick counter showing total cached articles.
+- **Main View:** Split the screen into two distinct sections (either a 2-column grid on desktop or two stacked sections on mobile):
+  1. **"Current Feed (Temporary)" Column:** Displays articles where `is_saved` is False. Show a subtle badge indicating how many days/hours are left before expiration.
+  2. **"Saved Library" Column:** Displays articles where `is_saved` is True.
+
+#### Article Cards & Actions
+Each news item should be rendered as a clean card containing:
+- Publisher Name (e.g., BBC) in a stylized color pill/badge.
+- Headline (Clickable text link).
+- Fetch timestamp (formatted relative to now, e.g., "3 hours ago").
+- A prominent action button: If in the Current feed, show a "Save Permanently" button (bookmark icon). If in the Saved Library, show an "Unsave" button.
+
+#### Behavioral Rules
+- **Tab Isolation:** Clicking a headline link must open `GET /cached_articles/{filename}` in a brand new tab (`target="_blank"` and `rel="noopener noreferrer"`).
+- **Asynchronous UI Updates:** Clicking "Save/Unsave" or "Refresh" must communicate with the API via JS `fetch()`. The UI should update the DOM dynamically (moving the card to the appropriate column) without doing a full browser page reload.
