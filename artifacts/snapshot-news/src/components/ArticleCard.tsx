@@ -1,8 +1,7 @@
 import { formatDistanceToNow, differenceInHours } from "date-fns";
-import { Bookmark, BookmarkX } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Bookmark, BookmarkX, ExternalLink, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Article } from "@workspace/api-client-react/src/generated/api.schemas";
+import { Article } from "@workspace/api-client-react";
 
 interface ArticleCardProps {
   article: Article;
@@ -10,83 +9,99 @@ interface ArticleCardProps {
   isSaving: boolean;
 }
 
-function getPublisherColor(publisher: string): string {
-  const normalized = publisher.toLowerCase();
-  if (normalized.includes("bbc")) return "bg-red-900 text-red-100 border-red-800";
-  if (normalized.includes("hacker news")) return "bg-orange-900 text-orange-100 border-orange-800";
-  if (normalized.includes("reuters")) return "bg-blue-900 text-blue-100 border-blue-800";
-  return "bg-slate-800 text-slate-300 border-slate-700";
-}
-
 export function ArticleCard({ article, onToggleSave, isSaving }: ArticleCardProps) {
-  const publisherColor = getPublisherColor(article.publisher);
-  
   const fetchedDate = new Date(article.fetchedAt);
   const timeAgo = formatDistanceToNow(fetchedDate, { addSuffix: true });
-  
+
   const expiryDate = new Date(fetchedDate.getTime() + 3 * 24 * 60 * 60 * 1000);
   const hoursUntilExpiry = differenceInHours(expiryDate, new Date());
-  
-  const isExpiringSoon = hoursUntilExpiry <= 24 && hoursUntilExpiry > 0;
-  
-  const linkHref = article.cacheFilename 
+  const isExpiringSoon = !article.isSaved && hoursUntilExpiry <= 24 && hoursUntilExpiry > 0;
+
+  const linkHref = article.cacheFilename
     ? `/api/cached_articles/${article.cacheFilename}`
     : article.url;
 
   return (
-    <div className="flex flex-col gap-3 p-4 rounded-md bg-card border border-card-border shadow-sm group">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-2 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className={`text-xs font-mono rounded-sm border ${publisherColor}`}>
-              {article.publisher}
-            </Badge>
-            <span className="text-xs font-mono text-muted-foreground">{timeAgo}</span>
+    <article
+      data-testid={`article-card-${article.id}`}
+      className={`
+        group relative flex flex-col bg-card border rounded-sm overflow-hidden
+        transition-shadow duration-200 hover:shadow-lg hover:shadow-black/30
+        ${article.isSaved ? "border-primary/30 bg-primary/5" : "border-card-border"}
+        ${isExpiringSoon ? "border-amber-800/40" : ""}
+      `}
+    >
+      {/* Saved indicator stripe */}
+      {article.isSaved && (
+        <div className="absolute top-0 left-0 w-0.5 h-full bg-primary" />
+      )}
+
+      <div className="flex flex-col gap-3 p-5">
+        {/* Meta row */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Clock className="w-3 h-3 shrink-0" />
+            <span className="text-[11px] font-mono tracking-wide">{timeAgo}</span>
           </div>
-          
-          <a 
-            href={linkHref}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-lg md:text-xl font-serif font-medium leading-snug hover:text-primary transition-colors line-clamp-3"
-          >
-            {article.headline}
-          </a>
-        </div>
-      </div>
-      
-      <div className="flex items-center justify-between mt-2 pt-3 border-t border-border/50">
-        <div className="flex items-center">
-          {!article.isSaved && hoursUntilExpiry > 0 && (
-            <span className={`text-xs font-mono px-2 py-1 rounded ${isExpiringSoon ? 'bg-amber-900/50 text-amber-200 border border-amber-800/50' : 'text-muted-foreground'}`}>
-              Expires in {hoursUntilExpiry}h
+
+          {isExpiringSoon && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 border border-amber-800/40 tracking-wider uppercase">
+              Expires {hoursUntilExpiry}h
             </span>
           )}
-          {!article.isSaved && hoursUntilExpiry <= 0 && (
-            <span className="text-xs font-mono text-destructive">Expired</span>
+          {article.isSaved && (
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-primary/20 text-primary border border-primary/20 tracking-wider uppercase">
+              Saved
+            </span>
           )}
         </div>
-        
-        <Button 
-          variant="ghost" 
-          size="sm" 
+
+        {/* Headline */}
+        <a
+          href={linkHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid={`link-article-${article.id}`}
+          className="text-base md:text-[17px] font-serif font-semibold leading-snug text-foreground hover:text-primary transition-colors duration-150 line-clamp-3 group-hover:text-primary/90"
+        >
+          {article.headline}
+        </a>
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between px-5 py-3 border-t border-border/40 bg-black/10 mt-auto">
+        <a
+          href={article.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid={`link-external-${article.id}`}
+          className="flex items-center gap-1.5 text-[11px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ExternalLink className="w-3 h-3" />
+          Original
+        </a>
+
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={() => onToggleSave(article.id)}
           disabled={isSaving}
-          className="h-8 px-2 text-xs font-mono hover:bg-secondary"
+          data-testid={`button-save-${article.id}`}
+          className="h-7 px-2.5 text-[11px] font-mono tracking-wide hover:bg-secondary gap-1.5"
         >
           {article.isSaved ? (
             <>
-              <BookmarkX className="w-4 h-4 mr-1.5" />
+              <BookmarkX className="w-3.5 h-3.5" />
               Unsave
             </>
           ) : (
             <>
-              <Bookmark className="w-4 h-4 mr-1.5" />
+              <Bookmark className="w-3.5 h-3.5" />
               Save
             </>
           )}
         </Button>
       </div>
-    </div>
+    </article>
   );
 }
