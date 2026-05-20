@@ -16,16 +16,23 @@ const CACHE_DIR = path.resolve(__dirname, "../../../../cached_articles");
 // Each source has a primary RSS feed (always reliable) and an optional
 // homepage URL for full-article scraping. If the HTML fetch fails or is
 // blocked we silently fall back to the RSS entry alone.
+// Google News RSS search feeds are always publicly accessible (200, valid XML).
+// We use site: queries so every result links back to the real publication.
+// The second URL is a backup in case Google throttles or changes the format.
 const SOURCES = [
   {
     publisher: "SF Chronicle",
-    rssUrl: "https://www.sfchronicle.com/rss/",
-    rssUrlFallback: "https://feeds.feedburner.com/sfgate/rss/news",
+    rssUrl:
+      "https://news.google.com/rss/search?q=site:sfchronicle.com&hl=en-US&gl=US&ceid=US:en",
+    rssUrlFallback:
+      "https://news.google.com/rss/search?q=san+francisco+chronicle&hl=en-US&gl=US&ceid=US:en",
   },
   {
     publisher: "The Press Democrat",
-    rssUrl: "https://www.pressdemocrat.com/feed/",
-    rssUrlFallback: "https://www.pressdemocrat.com/?rss=1",
+    rssUrl:
+      "https://news.google.com/rss/search?q=site:pressdemocrat.com&hl=en-US&gl=US&ceid=US:en",
+    rssUrlFallback:
+      "https://news.google.com/rss/search?q=press+democrat+santa+rosa&hl=en-US&gl=US&ceid=US:en",
   },
 ];
 
@@ -178,7 +185,16 @@ export async function fetchAndCacheArticles(): Promise<{
   await ensureCacheDir();
   const purgedCount = await purgeOldArticles();
 
-  const rssParser = new Parser({ timeout: 15000 });
+  const rssParser = new Parser({
+    timeout: 15000,
+    headers: {
+      "User-Agent": randomUA(),
+      Accept:
+        "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Cache-Control": "no-cache",
+    },
+  });
   let newCount = 0;
 
   for (const source of SOURCES) {
