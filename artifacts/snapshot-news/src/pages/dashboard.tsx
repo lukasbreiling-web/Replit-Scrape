@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Newspaper, BookMarked } from "lucide-react";
+import { RefreshCw, Newspaper, BookMarked, Search, X } from "lucide-react";
 import {
   useListArticles,
   useFetchArticles,
@@ -14,7 +14,12 @@ import { ArticleCard } from "@/components/ArticleCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useState } from "react";
 
-const PUBLICATIONS = ["Press Democrat", "Mission Local"] as const;
+const PUBLICATIONS = [
+  "Press Democrat",
+  "Mission Local",
+  "SF Gate",
+  "Berkeleyside",
+] as const;
 type Publication = (typeof PUBLICATIONS)[number];
 type Filter = "all" | Publication | "saved";
 
@@ -49,6 +54,7 @@ export default function Dashboard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<Filter>("all");
+  const [search, setSearch] = useState("");
 
   const { data: articles, isLoading: isArticlesLoading } = useListArticles();
   const { data: stats, isLoading: isStatsLoading } = useGetArticleStats();
@@ -98,19 +104,31 @@ export default function Dashboard() {
   const handleSave = (id: number) => toggleSave.mutate({ id });
 
   const allArticles: Article[] = articles ?? [];
+
+  const q = search.trim().toLowerCase();
+  const searchedArticles = q
+    ? allArticles.filter(
+        (a) =>
+          a.headline.toLowerCase().includes(q) ||
+          a.publisher.toLowerCase().includes(q),
+      )
+    : allArticles;
+
   const visibleArticles =
     filter === "all"
-      ? allArticles
+      ? searchedArticles
       : filter === "saved"
-      ? allArticles.filter((a) => a.isSaved)
-      : allArticles.filter((a) => a.publisher === filter);
+      ? searchedArticles.filter((a) => a.isSaved)
+      : searchedArticles.filter((a) => a.publisher === filter);
 
   const leadArticle = visibleArticles[0];
   const sidebarArticles = visibleArticles.slice(1, 4);
   const remainingArticles = visibleArticles.slice(4);
 
-  const pressdemMore = remainingArticles.filter((a) => a.publisher === "Press Democrat");
-  const missionMore = remainingArticles.filter((a) => a.publisher === "Mission Local");
+  const remainingByPublisher = PUBLICATIONS.map((pub) => ({
+    publisher: pub,
+    articles: remainingArticles.filter((a) => a.publisher === pub),
+  })).filter(({ articles }) => articles.length > 0);
 
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
@@ -165,22 +183,22 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* ── Section nav ── */}
+      {/* ── Section nav + search ── */}
       <div className="border-b border-[#e2e2e2] sticky top-0 bg-white z-20">
-        <div className="max-w-5xl mx-auto px-4">
-          <nav className="flex items-center gap-0 overflow-x-auto">
-            {(["all", "Press Democrat", "Mission Local", "saved"] as const).map((f) => {
+        <div className="max-w-5xl mx-auto px-4 flex items-center gap-0">
+          <nav className="flex items-center gap-0 overflow-x-auto flex-1 min-w-0">
+            {(["all", ...PUBLICATIONS, "saved"] as const).map((f) => {
               const label =
                 f === "all"
                   ? "All Stories"
                   : f === "saved"
                   ? `Saved${stats?.saved ? ` (${stats.saved})` : ""}`
                   : f;
-              const isActive = filter === f;
+              const isActive = filter === f && !search;
               return (
                 <button
                   key={f}
-                  onClick={() => setFilter(f)}
+                  onClick={() => { setFilter(f); setSearch(""); }}
                   className={`
                     px-4 py-3 text-[12px] tracking-[0.08em] uppercase shrink-0 border-b-2 transition-colors
                     ${isActive
@@ -194,10 +212,38 @@ export default function Dashboard() {
               );
             })}
           </nav>
+
+          {/* Search input */}
+          <div className="relative flex items-center shrink-0 ml-2">
+            <Search className="absolute left-2 w-3 h-3 text-[#aaa] pointer-events-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setFilter("all"); }}
+              placeholder="Search…"
+              className="pl-6 pr-6 py-1.5 text-[11px] border border-[#e2e2e2] rounded-sm bg-white text-[#121212] placeholder-[#bbb] focus:outline-none focus:border-[#121212] w-32 focus:w-44 transition-all"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                className="absolute right-1.5 text-[#aaa] hover:text-[#121212]"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       <main className="max-w-5xl mx-auto px-4 pb-16">
+
+        {/* ── Search label ── */}
+        {search && (
+          <p className="mt-4 text-[12px] text-[#888]">
+            Showing results for <span className="font-bold text-[#121212]">"{search}"</span>
+            {" "}— {visibleArticles.length} article{visibleArticles.length !== 1 ? "s" : ""}
+          </p>
+        )}
 
         {/* ── Loading state ── */}
         {isArticlesLoading && (
@@ -224,16 +270,22 @@ export default function Dashboard() {
           <div className="py-24 text-center">
             <Newspaper className="w-8 h-8 text-[#bbb] mx-auto mb-4" />
             <p className="text-[15px] font-serif text-[#888]">
-              {filter === "saved" ? "No saved articles." : "No articles yet."}
+              {search
+                ? `No articles match "${search}".`
+                : filter === "saved"
+                ? "No saved articles."
+                : "No articles yet."}
             </p>
             <p className="text-[12px] text-[#aaa] mt-1">
-              {filter === "saved"
+              {search
+                ? "Try a different keyword."
+                : filter === "saved"
                 ? "Bookmark stories to save them here."
                 : "Click Scrape in the top bar to fetch the latest stories."}
             </p>
-            {filter !== "all" && (
+            {(filter !== "all" || search) && (
               <button
-                onClick={() => setFilter("all")}
+                onClick={() => { setFilter("all"); setSearch(""); }}
                 className="mt-4 text-[12px] text-[#d0021b] underline underline-offset-2"
               >
                 View all stories
@@ -245,7 +297,7 @@ export default function Dashboard() {
         {/* ── TOP STORIES ── */}
         {!isArticlesLoading && leadArticle && (
           <>
-            <SectionRule label="Top Stories" />
+            <SectionRule label={search ? "Search Results" : "Top Stories"} />
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-0">
               {/* Lead article */}
@@ -277,46 +329,24 @@ export default function Dashboard() {
           </>
         )}
 
-        {/* ── MORE STORIES by publication ── */}
-        {!isArticlesLoading && remainingArticles.length > 0 && (
-          <>
-            {pressdemMore.length > 0 && (
-              <>
-                <SectionRule label="More from The Press Democrat" />
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-0">
-                  {pressdemMore.map((article) => (
-                    <div key={article.id} className="md:pr-6">
-                      <ArticleCard
-                        article={article}
-                        onToggleSave={handleSave}
-                        isSaving={pendingId === article.id}
-                        variant="grid"
-                      />
-                    </div>
-                  ))}
+        {/* ── MORE STORIES by publication (dynamic) ── */}
+        {!isArticlesLoading && remainingByPublisher.map(({ publisher, articles: pubArticles }) => (
+          <div key={publisher}>
+            <SectionRule label={`More from ${publisher}`} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-0">
+              {pubArticles.map((article) => (
+                <div key={article.id} className="md:pr-6">
+                  <ArticleCard
+                    article={article}
+                    onToggleSave={handleSave}
+                    isSaving={pendingId === article.id}
+                    variant="grid"
+                  />
                 </div>
-              </>
-            )}
-
-            {missionMore.length > 0 && (
-              <>
-                <SectionRule label="More from Mission Local" />
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-0">
-                  {missionMore.map((article) => (
-                    <div key={article.id} className="md:pr-6">
-                      <ArticleCard
-                        article={article}
-                        onToggleSave={handleSave}
-                        isSaving={pendingId === article.id}
-                        variant="grid"
-                      />
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </>
-        )}
+              ))}
+            </div>
+          </div>
+        ))}
 
         {/* ── Saved indicator ── */}
         {!isArticlesLoading && filter !== "saved" && stats && stats.saved > 0 && (
@@ -338,7 +368,7 @@ export default function Dashboard() {
       {/* ── Footer ── */}
       <footer className="border-t-4 border-[#121212]">
         <div className="max-w-5xl mx-auto px-4 py-6 text-center text-[11px] text-[#888] tracking-wider uppercase">
-          Snapshot · SF Bay Area · Sources: The Press Democrat, Mission Local
+          Snapshot · SF Bay Area · Sources: The Press Democrat, Mission Local, SF Gate, Berkeleyside
         </div>
       </footer>
     </div>

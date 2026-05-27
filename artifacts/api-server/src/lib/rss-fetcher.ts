@@ -36,6 +36,18 @@ const SOURCES = [
     // Articles: /YYYY/MM/slug/
     articleUrlPattern: "missionlocal\\.org/\\d{4}/\\d{2}/[^/?#]{5,}",
   },
+  {
+    publisher: "SF Gate",
+    homepageUrl: "https://www.sfgate.com/",
+    // Articles: /SECTION/article/SLUG-HASHID/
+    articleUrlPattern: "sfgate\\.com/[a-z-]+/article/[a-z0-9-]{10,}",
+  },
+  {
+    publisher: "Berkeleyside",
+    homepageUrl: "https://www.berkeleyside.org/",
+    // Articles: /YYYY/MM/DD/slug/
+    articleUrlPattern: "berkeleyside\\.org/\\d{4}/\\d{2}/\\d{2}/[^/?#]{5,}",
+  },
 ];
 
 // ── Paywall / challenge-page heuristics ───────────────────────────────────────
