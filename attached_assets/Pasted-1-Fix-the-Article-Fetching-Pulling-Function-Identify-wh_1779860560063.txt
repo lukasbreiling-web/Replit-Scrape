@@ -1,0 +1,33 @@
+1. Fix the Article Fetching/Pulling Function
+
+Identify why the current fetch function is failing (check for incorrect API endpoint URLs, missing or expired API keys, improper headers, or malformed request parameters)
+Ensure the API call uses the correct base URL and authentication method (e.g., API key passed as a query param or in the Authorization header, depending on the news source being used)
+Add proper error handling with try/catch blocks and log meaningful error messages to the console so failures are easy to diagnose
+Parse the API response correctly — map the returned JSON fields (e.g., title, description, url, urlToImage, publishedAt, source.name, author) to the app's article data model
+Handle edge cases: empty response arrays, missing fields (use fallback values), rate limit errors (429), and network timeouts
+If using a mock/placeholder data source for development, make sure it mirrors the real API's response shape so the switch to live data is seamless
+Test the fetch with at least 3 different categories or queries (e.g., top headlines, politics, technology) to confirm it works consistently
+
+2. Redesign the UI to Match the New York Times Style
+Typography
+
+Use "Cheltenham" or the closest serif alternative (e.g., Georgia) for headlines, and a clean sans-serif (e.g., Franklin Gothic / Arial) for body text and labels
+Set headline font sizes to roughly: top story ~2rem–2.8rem, secondary stories ~1.2rem–1.5rem, bylines/labels ~0.75rem uppercase tracking
+
+Layout
+
+Implement a multi-column grid layout mimicking NYT's front page: one dominant lead story on the left spanning 2–3 columns, with a vertical stack of smaller stories on the right
+Add a horizontal rule divider between the top navigation and the article grid, and between individual story sections
+Include a top navigation bar with a centered publication title/logo, and left/right nav links (e.g., sections like World, U.S., Politics, Business, Arts)
+Add a section label above article groups (e.g., a small caps gray label like "TOP STORIES" or "LATEST NEWS")
+
+Article Cards
+
+Each card should display: section tag (e.g., "WORLD" in red/gray small caps), headline in serif font, a short summary/description in smaller body text, author byline, and relative timestamp (e.g., "2h ago")
+The lead article should show a large featured image above the headline; secondary articles may show a smaller thumbnail aligned to the right of the text
+No card shadows or rounded corners — keep borders minimal, using thin 1px gray lines to separate stories (NYT uses flat, editorial aesthetic)
+
+Color & Spacing
+
+Background: white (#ffffff), text: near-black (#121212), section labels: dark gray or NYT red (#d0021b) for breaking/top labels
+Generous whitespace between articles; NYT uses padding rather than cards/boxes to separate content

@@ -11,98 +11,36 @@ import {
 } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { ArticleCard } from "@/components/ArticleCard";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useState } from "react";
 
-// The two publications we track
 const PUBLICATIONS = ["SF Chronicle", "The Press Democrat"] as const;
 type Publication = (typeof PUBLICATIONS)[number];
+type Filter = "all" | Publication | "saved";
 
-const PUB_CONFIG: Record<
-  Publication,
-  { accent: string; label: string; borderColor: string; dotColor: string }
-> = {
-  "SF Chronicle": {
-    label: "SF Chronicle",
-    accent: "text-sky-400",
-    borderColor: "border-sky-700/40",
-    dotColor: "bg-sky-400",
-  },
-  "The Press Democrat": {
-    label: "The Press Democrat",
-    accent: "text-emerald-400",
-    borderColor: "border-emerald-700/40",
-    dotColor: "bg-emerald-400",
-  },
-};
-
-function PublisherColumn({
-  publisher,
-  articles,
-  isLoading,
-  onToggleSave,
-  isPendingId,
-}: {
-  publisher: Publication;
-  articles: Article[] | undefined;
-  isLoading: boolean;
-  onToggleSave: (id: number) => void;
-  isPendingId: number | undefined;
-}) {
-  const cfg = PUB_CONFIG[publisher];
-  const filtered = (articles ?? ([] as Article[])).filter((a) => a.publisher === publisher);
-  const savedCount = filtered.filter((a) => a.isSaved).length;
-
+function SectionRule({ label }: { label: string }) {
   return (
-    <div className="flex flex-col gap-5">
-      {/* Column header */}
-      <div className={`flex items-center justify-between pb-3 border-b ${cfg.borderColor}`}>
-        <div className="flex items-center gap-2.5">
-          <span className={`w-2 h-2 rounded-full shrink-0 ${cfg.dotColor}`} />
-          <h2 className={`text-sm font-mono font-semibold tracking-widest uppercase ${cfg.accent}`}>
-            {cfg.label}
-          </h2>
-        </div>
-        <div className="flex items-center gap-2">
-          {savedCount > 0 && (
-            <span className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground">
-              <BookMarked className="w-3 h-3" />
-              {savedCount}
-            </span>
-          )}
-          <span className="text-[11px] font-mono text-muted-foreground bg-secondary px-2 py-0.5 rounded-sm">
-            {filtered.length}
-          </span>
-        </div>
-      </div>
+    <div className="flex items-center gap-0 mt-8 mb-4">
+      <div className="flex-1 h-px bg-[#121212]" />
+      <span className="px-3 text-[11px] font-bold tracking-[0.15em] uppercase text-[#121212] shrink-0">
+        {label}
+      </span>
+      <div className="flex-1 h-px bg-[#e2e2e2]" />
+    </div>
+  );
+}
 
-      {/* Cards */}
-      {isLoading ? (
-        <div className="flex flex-col gap-4">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-36 w-full rounded-sm bg-card" />
-          ))}
+function SkeletonArticles({ count = 4 }: { count?: number }) {
+  return (
+    <div className="flex flex-col gap-4">
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="py-4 border-b border-[#e2e2e2] flex flex-col gap-2">
+          <Skeleton className="h-3 w-20 bg-[#f0f0f0]" />
+          <Skeleton className="h-5 w-full bg-[#f0f0f0]" />
+          <Skeleton className="h-5 w-4/5 bg-[#f0f0f0]" />
+          <Skeleton className="h-3 w-16 bg-[#f5f5f5]" />
         </div>
-      ) : filtered.length === 0 ? (
-        <div className="p-10 text-center border border-dashed border-border/50 rounded-sm bg-card/10">
-          <Newspaper className="w-6 h-6 text-muted-foreground/40 mx-auto mb-3" />
-          <p className="text-sm font-mono text-muted-foreground/60">No articles yet.</p>
-          <p className="text-xs font-mono text-muted-foreground/40 mt-1">
-            Hit Scrape to fetch the latest stories.
-          </p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {filtered.map((article) => (
-            <ArticleCard
-              key={article.id}
-              article={article}
-              onToggleSave={onToggleSave}
-              isSaving={isPendingId === article.id}
-            />
-          ))}
-        </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -110,6 +48,7 @@ function PublisherColumn({
 export default function Dashboard() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [filter, setFilter] = useState<Filter>("all");
 
   const { data: articles, isLoading: isArticlesLoading } = useListArticles();
   const { data: stats, isLoading: isStatsLoading } = useGetArticleStats();
@@ -121,13 +60,15 @@ export default function Dashboard() {
         queryClient.invalidateQueries({ queryKey: getGetArticleStatsQueryKey() });
         toast({
           title: "Feed Refreshed",
-          description: `${result.newCount} new article${result.newCount !== 1 ? "s" : ""} fetched${result.purgedCount > 0 ? `, ${result.purgedCount} purged` : ""}.`,
+          description:
+            `${result.newCount} new article${result.newCount !== 1 ? "s" : ""} fetched` +
+            (result.purgedCount > 0 ? `, ${result.purgedCount} purged` : "."),
         });
       },
       onError: () => {
         toast({
           title: "Refresh Failed",
-          description: "Could not reach one or more sources.",
+          description: "Could not reach one or more sources. Check the server logs.",
           variant: "destructive",
         });
       },
@@ -154,81 +95,259 @@ export default function Dashboard() {
       ? (toggleSave.variables as { id: number }).id
       : undefined;
 
-  return (
-    <div className="min-h-screen bg-background text-foreground font-sans">
-      {/* ── Header ── */}
-      <header className="border-b border-border bg-card/60 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-5 h-14 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3 min-w-0">
-            <h1 className="text-base font-serif font-bold tracking-tight shrink-0">
-              Snapshot
-            </h1>
-            <span className="hidden sm:block text-muted-foreground/40 font-mono text-xs">|</span>
-            <span className="hidden sm:block text-xs font-mono text-muted-foreground/60 truncate">
-              SF Bay Area News
-            </span>
+  const handleSave = (id: number) => toggleSave.mutate({ id });
 
+  // Filter articles
+  const allArticles: Article[] = articles ?? [];
+  const visibleArticles =
+    filter === "all"
+      ? allArticles
+      : filter === "saved"
+      ? allArticles.filter((a) => a.isSaved)
+      : allArticles.filter((a) => a.publisher === filter);
+
+  // Split for layout
+  const leadArticle = visibleArticles[0];
+  const sidebarArticles = visibleArticles.slice(1, 4);
+  const remainingArticles = visibleArticles.slice(4);
+
+  // For the "more stories" section — split by publisher
+  const chronicleMore = remainingArticles.filter((a) => a.publisher === "SF Chronicle");
+  const pressdemMore = remainingArticles.filter((a) => a.publisher === "The Press Democrat");
+
+  // Today's date in NYT format
+  const today = new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
+  return (
+    <div className="min-h-screen bg-white text-[#121212]" style={{ fontFamily: "Franklin Gothic Medium, Arial Narrow, Arial, sans-serif" }}>
+
+      {/* ── Top utility bar ── */}
+      <div className="border-b border-[#e2e2e2]">
+        <div className="max-w-5xl mx-auto px-4 h-9 flex items-center justify-between text-[11px] text-[#666]">
+          <span>{today}</span>
+          <div className="flex items-center gap-4">
             {!isStatsLoading && stats && (
-              <span
-                data-testid="text-total-cached"
-                className="hidden md:inline-flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground bg-secondary px-2 py-1 rounded-sm ml-2"
-              >
-                {stats.total} cached
+              <span data-testid="text-total-cached">
+                {stats.total} articles cached
                 {stats.saved > 0 && (
-                  <span className="text-primary">· {stats.saved} saved</span>
+                  <span className="text-[#d0021b] ml-1">· {stats.saved} saved</span>
                 )}
               </span>
             )}
+            <button
+              onClick={() => fetchArticles.mutate()}
+              disabled={fetchArticles.isPending}
+              data-testid="button-scrape"
+              className="flex items-center gap-1.5 text-[11px] tracking-wide text-[#666] hover:text-[#121212] disabled:opacity-40 transition-colors border-l border-[#e2e2e2] pl-4"
+            >
+              <RefreshCw
+                className={`w-3 h-3 ${fetchArticles.isPending ? "animate-spin" : ""}`}
+              />
+              {fetchArticles.isPending ? "Scraping…" : "Scrape"}
+            </button>
           </div>
-
-          <Button
-            onClick={() => fetchArticles.mutate()}
-            disabled={fetchArticles.isPending}
-            data-testid="button-scrape"
-            variant="outline"
-            size="sm"
-            className="font-mono text-xs h-8 border-border shrink-0"
-          >
-            <RefreshCw
-              className={`w-3.5 h-3.5 mr-2 ${fetchArticles.isPending ? "animate-spin" : ""}`}
-            />
-            {fetchArticles.isPending ? "Scraping…" : "Scrape"}
-          </Button>
-        </div>
-      </header>
-
-      {/* ── Publication notice ── */}
-      <div className="border-b border-border/30 bg-black/20">
-        <div className="max-w-6xl mx-auto px-5 py-2 flex items-center gap-4">
-          {PUBLICATIONS.map((pub) => {
-            const cfg = PUB_CONFIG[pub];
-            const count = (articles ?? []).filter((a) => a.publisher === pub).length;
-            return (
-              <div key={pub} className="flex items-center gap-1.5">
-                <span className={`w-1.5 h-1.5 rounded-full ${cfg.dotColor}`} />
-                <span className={`text-[11px] font-mono ${cfg.accent}`}>{cfg.label}</span>
-                <span className="text-[10px] font-mono text-muted-foreground/50">({count})</span>
-              </div>
-            );
-          })}
         </div>
       </div>
 
-      {/* ── Two-column publisher layout ── */}
-      <main className="max-w-6xl mx-auto px-5 py-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-10 items-start">
-          {PUBLICATIONS.map((pub) => (
-            <PublisherColumn
-              key={pub}
-              publisher={pub}
-              articles={articles}
-              isLoading={isArticlesLoading}
-              onToggleSave={(id) => toggleSave.mutate({ id })}
-              isPendingId={pendingId}
-            />
-          ))}
+      {/* ── Masthead ── */}
+      <div className="border-b-4 border-[#121212]">
+        <div className="max-w-5xl mx-auto px-4 py-5 text-center">
+          <h1
+            className="text-[3.5rem] leading-none tracking-tight text-[#121212] select-none"
+            style={{ fontFamily: "Georgia, 'Times New Roman', Times, serif", fontWeight: 700 }}
+          >
+            Snapshot
+          </h1>
+          <p className="text-[11px] tracking-[0.25em] uppercase text-[#888] mt-1">
+            SF Bay Area News Aggregator
+          </p>
         </div>
+      </div>
+
+      {/* ── Section nav ── */}
+      <div className="border-b border-[#e2e2e2] sticky top-0 bg-white z-20">
+        <div className="max-w-5xl mx-auto px-4">
+          <nav className="flex items-center gap-0 overflow-x-auto">
+            {(["all", "SF Chronicle", "The Press Democrat", "saved"] as const).map((f) => {
+              const label =
+                f === "all"
+                  ? "All Stories"
+                  : f === "saved"
+                  ? `Saved${stats?.saved ? ` (${stats.saved})` : ""}`
+                  : f;
+              const isActive = filter === f;
+              return (
+                <button
+                  key={f}
+                  onClick={() => setFilter(f)}
+                  className={`
+                    px-4 py-3 text-[12px] tracking-[0.08em] uppercase shrink-0 border-b-2 transition-colors
+                    ${isActive
+                      ? "border-[#d0021b] text-[#d0021b] font-bold"
+                      : "border-transparent text-[#666] hover:text-[#121212]"
+                    }
+                  `}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+      </div>
+
+      <main className="max-w-5xl mx-auto px-4 pb-16">
+
+        {/* ── Loading state ── */}
+        {isArticlesLoading && (
+          <>
+            <SectionRule label="Top Stories" />
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-0">
+              <div className="md:col-span-2 md:pr-8 md:border-r border-[#e2e2e2]">
+                <div className="flex flex-col gap-3">
+                  <Skeleton className="h-4 w-24 bg-[#f0f0f0]" />
+                  <Skeleton className="h-10 w-full bg-[#f0f0f0]" />
+                  <Skeleton className="h-10 w-5/6 bg-[#f0f0f0]" />
+                  <Skeleton className="h-8 w-4/6 bg-[#f0f0f0]" />
+                </div>
+              </div>
+              <div className="md:col-span-1 md:pl-8">
+                <SkeletonArticles count={3} />
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Empty state ── */}
+        {!isArticlesLoading && visibleArticles.length === 0 && (
+          <div className="py-24 text-center">
+            <Newspaper className="w-8 h-8 text-[#bbb] mx-auto mb-4" />
+            <p className="text-[15px] font-serif text-[#888]">
+              {filter === "saved" ? "No saved articles." : "No articles yet."}
+            </p>
+            <p className="text-[12px] text-[#aaa] mt-1">
+              {filter === "saved"
+                ? "Bookmark stories to save them here."
+                : "Click Scrape in the top bar to fetch the latest stories."}
+            </p>
+            {filter !== "all" && (
+              <button
+                onClick={() => setFilter("all")}
+                className="mt-4 text-[12px] text-[#d0021b] underline underline-offset-2"
+              >
+                View all stories
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ── TOP STORIES ── */}
+        {!isArticlesLoading && leadArticle && (
+          <>
+            <SectionRule label="Top Stories" />
+
+            {/* Lead + Sidebar grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-0">
+              {/* Lead article */}
+              <div className="md:col-span-2 md:pr-8 md:border-r border-[#e2e2e2] pb-8 md:pb-0">
+                <ArticleCard
+                  article={leadArticle}
+                  onToggleSave={handleSave}
+                  isSaving={pendingId === leadArticle.id}
+                  variant="lead"
+                />
+              </div>
+
+              {/* Sidebar articles */}
+              <div className="md:col-span-1 md:pl-8 border-t border-[#e2e2e2] md:border-t-0">
+                {sidebarArticles.length === 0 && (
+                  <p className="text-[12px] text-[#aaa] pt-4">No more articles in this view.</p>
+                )}
+                {sidebarArticles.map((article) => (
+                  <ArticleCard
+                    key={article.id}
+                    article={article}
+                    onToggleSave={handleSave}
+                    isSaving={pendingId === article.id}
+                    variant="secondary"
+                  />
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── MORE STORIES by publication ── */}
+        {!isArticlesLoading && remainingArticles.length > 0 && (
+          <>
+            {/* SF Chronicle section */}
+            {chronicleMore.length > 0 && (
+              <>
+                <SectionRule label="More from SF Chronicle" />
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-0">
+                  {chronicleMore.map((article) => (
+                    <div key={article.id} className="md:pr-6">
+                      <ArticleCard
+                        article={article}
+                        onToggleSave={handleSave}
+                        isSaving={pendingId === article.id}
+                        variant="grid"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Press Democrat section */}
+            {pressdemMore.length > 0 && (
+              <>
+                <SectionRule label="More from The Press Democrat" />
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-0">
+                  {pressdemMore.map((article) => (
+                    <div key={article.id} className="md:pr-6">
+                      <ArticleCard
+                        article={article}
+                        onToggleSave={handleSave}
+                        isSaving={pendingId === article.id}
+                        variant="grid"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ── Saved indicator ── */}
+        {!isArticlesLoading && filter !== "saved" && stats && stats.saved > 0 && (
+          <div className="mt-10 pt-6 border-t border-[#e2e2e2] flex items-center justify-between">
+            <div className="flex items-center gap-2 text-[12px] text-[#888]">
+              <BookMarked className="w-3.5 h-3.5" />
+              {stats.saved} article{stats.saved !== 1 ? "s" : ""} in your library
+            </div>
+            <button
+              onClick={() => setFilter("saved")}
+              className="text-[12px] text-[#d0021b] underline underline-offset-2"
+            >
+              View saved
+            </button>
+          </div>
+        )}
       </main>
+
+      {/* ── Footer ── */}
+      <footer className="border-t-4 border-[#121212]">
+        <div className="max-w-5xl mx-auto px-4 py-6 text-center text-[11px] text-[#888] tracking-wider uppercase">
+          Snapshot · SF Bay Area · Sources: SF Chronicle, The Press Democrat
+        </div>
+      </footer>
     </div>
   );
 }

@@ -24,12 +24,17 @@ router.get("/articles", async (req, res) => {
 });
 
 router.post("/articles/fetch", async (req, res) => {
-  const { newCount, purgedCount } = await fetchAndCacheArticles();
-  const articles = await db
-    .select()
-    .from(articlesTable)
-    .orderBy(desc(articlesTable.fetchedAt));
-  res.json({ articles, newCount, purgedCount });
+  try {
+    const { newCount, purgedCount, errors } = await fetchAndCacheArticles();
+    const articles = await db
+      .select()
+      .from(articlesTable)
+      .orderBy(desc(articlesTable.fetchedAt));
+    res.json({ articles, newCount, purgedCount, errors });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unknown fetch error";
+    res.status(500).json({ error: `Fetch failed: ${message}`, articles: [], newCount: 0, purgedCount: 0, errors: [message] });
+  }
 });
 
 router.post("/articles/:id/toggle-save", async (req, res) => {

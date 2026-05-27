@@ -17,12 +17,9 @@ const __dirname = path.dirname(__filename);
 const CACHE_DIR = path.resolve(__dirname, "../../../../cached_articles");
 
 // ── Sources ──────────────────────────────────────────────────────────────────
-// Each source has a primary RSS feed (always reliable) and an optional
-// homepage URL for full-article scraping. If the HTML fetch fails or is
-// blocked we silently fall back to the RSS entry alone.
-// Google News RSS search feeds are always publicly accessible (200, valid XML).
-// We use site: queries so every result links back to the real publication.
-// The second URL is a backup in case Google throttles or changes the format.
+// Google News RSS feeds — always publicly accessible, no API key required.
+// The "site:" operator ensures results link to the real publication.
+// A fallback URL is tried if the primary fails (e.g. Google throttle).
 const SOURCES = [
   {
     publisher: "SF Chronicle",
@@ -40,7 +37,7 @@ const SOURCES = [
   },
 ];
 
-// ── Stealth headers ───────────────────────────────────────────────────────────
+// ── Stealth headers for RSS parser ────────────────────────────────────────────
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -53,36 +50,23 @@ function randomUA(): string {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-function stealthHeaders(url: string): Record<string, string> {
-  const ua = randomUA();
-  const isFirefox = ua.includes("Firefox");
-  return {
-    "User-Agent": ua,
-    Accept: isFirefox
-      ? "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-      : "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "no-cache",
-    Pragma: "no-cache",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Sec-Ch-Ua": isFirefox
-      ? ""
-      : '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-    "Sec-Ch-Ua-Mobile": "?0",
-    "Sec-Ch-Ua-Platform": ua.includes("Windows") ? '"Windows"' : '"macOS"',
-    Referer: new URL(url).origin + "/",
-  };
-}
+// ── Paywall / challenge-page heuristics ───────────────────────────────────────
+const PAYWALL_PATTERNS = [
+  /subscribe to continue/i,
+  /create a free account/i,
+  /sign in to read/i,
+  /this content is for subscribers/i,
+  /access denied/i,
+  /enable javascript/i,
+  /just a moment/i,             // Cloudflare
+  /checking your browser/i,     // Cloudflare / DDoS-GUARD
+  /please turn javascript on/i,
+];
 
-// Randomized delay: 800ms–3500ms to mimic human pacing
-function randomDelay(minMs = 800, maxMs = 3500): Promise<void> {
-  const ms = Math.floor(Math.random() * (maxMs - minMs)) + minMs;
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function looksLikeBlockPage(html: string): boolean {
+  if (html.length < 1500) return true;
+  const snippet = html.slice(0, 6000).toLowerCase();
+  return PAYWALL_PATTERNS.some((re) => re.test(snippet));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -97,6 +81,12 @@ function sanitizeFilename(title: string): string {
     Date.now() +
     ".html"
   );
+}
+
+// Randomized delay: 600ms–2000ms between requests (reduced to not slow scrapes too much)
+function randomDelay(minMs = 600, maxMs = 2000): Promise<void> {
+  const ms = Math.floor(Math.random() * (maxMs - minMs)) + minMs;
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function ensureCacheDir() {
@@ -145,90 +135,179 @@ export async function purgeOldArticles(): Promise<number> {
 // Path to the Python curl-based scraper script
 const SCRAPER_SCRIPT = path.resolve(__dirname, "../../../../scripts/scraper.py");
 
-// ── Fetch one article HTML via Python curl scraper ────────────────────────────
+// ── Fetch one article's HTML via the Python/curl scraper ─────────────────────
+// Returns null on any failure — the caller always falls back to the RSS URL.
 async function fetchArticleHtml(
   articleUrl: string,
   headline: string,
 ): Promise<{ cachePath: string; cacheFilename: string } | null> {
   try {
-    const { stdout: html } = await execFileAsync(
+    const { stdout: html, stderr } = await execFileAsync(
       "python3",
       [SCRAPER_SCRIPT, articleUrl],
       { maxBuffer: 10 * 1024 * 1024, timeout: 30000 },
     );
 
-    if (!html || html.length < 2000) {
-      logger.warn({ url: articleUrl }, "Scraper returned too-short response — possible challenge page, skipping");
+    if (stderr?.trim()) {
+      // scraper.py writes JSON error objects to stderr — log them for diagnosis
+      logger.warn({ url: articleUrl, scraperStderr: stderr.trim() }, "Scraper stderr");
+    }
+
+    if (!html) {
+      logger.warn({ url: articleUrl }, "Scraper returned empty response — skipping cache");
+      return null;
+    }
+
+    if (looksLikeBlockPage(html)) {
+      logger.warn(
+        { url: articleUrl, htmlLength: html.length },
+        "Response looks like a block/paywall page — skipping cache",
+      );
       return null;
     }
 
     const filename = sanitizeFilename(headline);
     const filePath = path.join(CACHE_DIR, filename);
     await fsPromises.writeFile(filePath, html, "utf-8");
+    logger.info({ url: articleUrl, filename }, "Cached article HTML");
     return { cachePath: filePath, cacheFilename: filename };
-  } catch (err) {
-    logger.warn({ err, url: articleUrl }, "Python curl scraper failed — falling back to RSS URL only");
+  } catch (err: unknown) {
+    const isTimeout =
+      err instanceof Error && err.message.toLowerCase().includes("timeout");
+    const isExitError =
+      err instanceof Error && "code" in err && typeof (err as { code?: unknown }).code === "number";
+    const exitCode = isExitError ? (err as { code: number }).code : undefined;
+
+    if (isTimeout) {
+      logger.warn({ url: articleUrl }, "Scraper timed out — falling back to RSS URL");
+    } else if (exitCode !== undefined) {
+      logger.warn(
+        { url: articleUrl, exitCode },
+        "Scraper exited with non-zero code — falling back to RSS URL",
+      );
+    } else {
+      logger.warn({ err, url: articleUrl }, "Scraper error — falling back to RSS URL");
+    }
     return null;
   }
+}
+
+// ── RSS parsing with retry ─────────────────────────────────────────────────────
+async function parseRssFeed(
+  parser: Parser,
+  feedUrl: string,
+  retries = 2,
+): Promise<Parser.Item[]> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const parsed = await parser.parseURL(feedUrl);
+      const items = parsed.items ?? [];
+      logger.info({ feedUrl, count: items.length, attempt }, "RSS parsed");
+      return items;
+    } catch (err: unknown) {
+      const isRateLimit =
+        err instanceof Error &&
+        (err.message.includes("429") || err.message.includes("Too Many Requests"));
+
+      if (isRateLimit) {
+        logger.warn({ feedUrl, attempt }, "RSS rate-limited (429) — waiting before retry");
+        await new Promise((r) => setTimeout(r, 5000 * (attempt + 1)));
+      } else if (attempt < retries) {
+        logger.warn({ err, feedUrl, attempt }, "RSS parse failed — retrying");
+        await new Promise((r) => setTimeout(r, 1500));
+      } else {
+        logger.warn({ err, feedUrl }, "RSS parse failed after all retries");
+      }
+    }
+  }
+  return [];
 }
 
 // ── Main fetch orchestrator ───────────────────────────────────────────────────
 export async function fetchAndCacheArticles(): Promise<{
   newCount: number;
   purgedCount: number;
+  errors: string[];
 }> {
   await ensureCacheDir();
   const purgedCount = await purgeOldArticles();
 
   const rssParser = new Parser({
-    timeout: 15000,
+    timeout: 18000,
     headers: {
       "User-Agent": randomUA(),
-      Accept:
-        "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
+      Accept: "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
       "Cache-Control": "no-cache",
     },
   });
+
   let newCount = 0;
+  const errors: string[] = [];
 
   for (const source of SOURCES) {
-    // ── 1. Parse RSS (primary, then fallback URL) ──
+    logger.info({ publisher: source.publisher }, "Processing source");
+
+    // ── 1. Parse RSS — try primary URL then fallback ──
     let items: Parser.Item[] = [];
+
     for (const feedUrl of [source.rssUrl, source.rssUrlFallback]) {
-      try {
-        const parsed = await rssParser.parseURL(feedUrl);
-        items = parsed.items ?? [];
-        logger.info({ feedUrl, count: items.length }, "RSS parsed");
-        break;
-      } catch (err) {
-        logger.warn({ err, feedUrl }, "RSS feed parse failed, trying fallback");
-      }
+      items = await parseRssFeed(rssParser, feedUrl);
+      if (items.length > 0) break;
+      logger.warn(
+        { publisher: source.publisher, feedUrl },
+        "No items from feed — trying fallback",
+      );
     }
 
     if (items.length === 0) {
-      logger.warn({ publisher: source.publisher }, "No items from any RSS URL — skipping source");
+      const msg = `No items from any RSS URL for ${source.publisher}`;
+      logger.warn({ publisher: source.publisher }, msg);
+      errors.push(msg);
       continue;
     }
 
-    // ── 2. Process each article ──
+    // ── 2. Process each item ──
     for (const item of items.slice(0, 20)) {
-      const url = item.link ?? item.guid;
-      const headline = item.title;
-      if (!url || !headline) continue;
+      // Robust field extraction with fallbacks
+      const url = (item.link ?? item.guid ?? "").trim();
+      const headline = (item.title ?? item.contentSnippet ?? "Untitled").trim();
 
-      // Deduplicate
-      const existing = await db
-        .select({ id: articlesTable.id })
-        .from(articlesTable)
-        .where(eq(articlesTable.url, url))
-        .limit(1);
-      if (existing.length > 0) continue;
+      if (!url) {
+        logger.warn({ item }, "RSS item missing URL — skipping");
+        continue;
+      }
+      if (!headline) {
+        logger.warn({ url }, "RSS item missing headline — skipping");
+        continue;
+      }
 
-      // Human-like delay before each fetch
+      // Validate URL shape
+      try {
+        new URL(url);
+      } catch {
+        logger.warn({ url }, "RSS item has malformed URL — skipping");
+        continue;
+      }
+
+      // Deduplicate by URL
+      try {
+        const existing = await db
+          .select({ id: articlesTable.id })
+          .from(articlesTable)
+          .where(eq(articlesTable.url, url))
+          .limit(1);
+        if (existing.length > 0) continue;
+      } catch (err) {
+        logger.error({ err, url }, "DB dedup check failed — skipping article");
+        errors.push(`DB error for ${url}`);
+        continue;
+      }
+
+      // Human-like delay before each HTML fetch
       await randomDelay();
 
-      // Try to cache full HTML; gracefully fall back to null if blocked
+      // Try to cache full HTML; gracefully fall back to null if blocked/failed
       const cached = await fetchArticleHtml(url, headline);
 
       try {
@@ -241,12 +320,22 @@ export async function fetchAndCacheArticles(): Promise<{
           isSaved: false,
         });
         newCount++;
-      } catch (err) {
-        logger.warn({ err, url }, "Failed to insert article (may be duplicate)");
+        logger.info(
+          { headline: headline.slice(0, 60), publisher: source.publisher, cached: !!cached },
+          "Article stored",
+        );
+      } catch (err: unknown) {
+        const isDuplicate =
+          err instanceof Error &&
+          (err.message.includes("unique") || err.message.includes("duplicate"));
+        if (!isDuplicate) {
+          logger.warn({ err, url }, "Failed to insert article");
+          errors.push(`Insert failed for ${url}`);
+        }
       }
     }
   }
 
-  logger.info({ newCount, purgedCount }, "Fetch complete");
-  return { newCount, purgedCount };
+  logger.info({ newCount, purgedCount, errorCount: errors.length }, "Fetch complete");
+  return { newCount, purgedCount, errors };
 }
