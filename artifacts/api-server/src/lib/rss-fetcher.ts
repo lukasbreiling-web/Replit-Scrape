@@ -2,10 +2,14 @@ import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import Parser from "rss-parser";
 import { db, articlesTable } from "@workspace/db";
 import { lt, and, eq } from "drizzle-orm";
 import { logger } from "./logger.js";
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -138,32 +142,23 @@ export async function purgeOldArticles(): Promise<number> {
   return purgedCount;
 }
 
-// ── Fetch one article HTML with stealth headers ───────────────────────────────
+// Path to the Python curl-based scraper script
+const SCRAPER_SCRIPT = path.resolve(__dirname, "../../../../scripts/scraper.py");
+
+// ── Fetch one article HTML via Python curl scraper ────────────────────────────
 async function fetchArticleHtml(
   articleUrl: string,
   headline: string,
 ): Promise<{ cachePath: string; cacheFilename: string } | null> {
   try {
-    const response = await fetch(articleUrl, {
-      headers: stealthHeaders(articleUrl),
-      redirect: "follow",
-      signal: AbortSignal.timeout(12000),
-    });
+    const { stdout: html } = await execFileAsync(
+      "python3",
+      [SCRAPER_SCRIPT, articleUrl],
+      { maxBuffer: 10 * 1024 * 1024, timeout: 30000 },
+    );
 
-    // Treat hard blocks / paywalls as a cache miss — fall back gracefully
-    if (!response.ok || response.status === 403 || response.status === 429) {
-      logger.warn(
-        { url: articleUrl, status: response.status },
-        "Article fetch blocked — skipping HTML cache",
-      );
-      return null;
-    }
-
-    const html = await response.text();
-
-    // Heuristic: if response is suspiciously short it's likely a challenge page
-    if (html.length < 2000) {
-      logger.warn({ url: articleUrl }, "Response too short — possible challenge page, skipping");
+    if (!html || html.length < 2000) {
+      logger.warn({ url: articleUrl }, "Scraper returned too-short response — possible challenge page, skipping");
       return null;
     }
 
@@ -172,7 +167,7 @@ async function fetchArticleHtml(
     await fsPromises.writeFile(filePath, html, "utf-8");
     return { cachePath: filePath, cacheFilename: filename };
   } catch (err) {
-    logger.warn({ err, url: articleUrl }, "Failed to fetch/cache article HTML — falling back to RSS URL");
+    logger.warn({ err, url: articleUrl }, "Python curl scraper failed — falling back to RSS URL only");
     return null;
   }
 }
