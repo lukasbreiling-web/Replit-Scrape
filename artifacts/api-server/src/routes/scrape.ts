@@ -1,14 +1,12 @@
 import { Router } from "express";
 import path from "path";
-import { fileURLToPath } from "url";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const SCRAPER_SCRIPT = path.resolve(__dirname, "../../../../scripts/scraper.py");
+const WORKSPACE_ROOT = path.resolve(process.cwd(), "../..");
+const SCRAPER_SCRIPT = path.join(WORKSPACE_ROOT, "scripts", "scraper.py");
 
 const router = Router();
 

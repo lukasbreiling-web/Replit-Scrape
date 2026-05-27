@@ -11,6 +11,59 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "API Server"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Snapshot News"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "HTML Viewer"
+
+[[workflows.workflow]]
+name = "API Server"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=8080 pnpm --filter @workspace/api-server run dev"
+waitForPort = 8080
+
+[[workflows.workflow]]
+name = "Snapshot News"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=24788 BASE_PATH=/ pnpm --filter @workspace/snapshot-news run dev"
+waitForPort = 24788
+
+[[workflows.workflow]]
+name = "HTML Viewer"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "PORT=18103 BASE_PATH=/html-viewer/ pnpm --filter @workspace/html-viewer run dev"
+waitForPort = 18103
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true

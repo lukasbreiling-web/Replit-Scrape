@@ -1,17 +1,15 @@
 import { Router } from "express";
 import path from "path";
-import { fileURLToPath } from "url";
 import fsPromises from "fs/promises";
 import { db, articlesTable } from "@workspace/db";
-import { eq, desc, lt, and, count, sql } from "drizzle-orm";
+import { eq, desc, lt, and, count } from "drizzle-orm";
 import { fetchAndCacheArticles } from "../lib/rss-fetcher.js";
 import {
   ToggleSaveParams,
 } from "@workspace/api-zod";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const CACHE_DIR = path.resolve(__dirname, "../../../../cached_articles");
+const WORKSPACE_ROOT = path.resolve(process.cwd(), "../..");
+const CACHE_DIR = path.join(WORKSPACE_ROOT, "cached_articles");
 
 const router = Router();
 
