@@ -10,13 +10,13 @@ interface ArticleCardProps {
 }
 
 const PUB_LABEL: Record<string, string> = {
-  "SF Chronicle": "SF CHRONICLE",
-  "The Press Democrat": "PRESS DEMOCRAT",
+  "Press Democrat": "PRESS DEMOCRAT",
+  "Mission Local": "MISSION LOCAL",
 };
 
 const PUB_COLOR: Record<string, string> = {
-  "SF Chronicle": "#d0021b",
-  "The Press Democrat": "#326891",
+  "Press Democrat": "#326891",
+  "Mission Local": "#d0021b",
 };
 
 export function ArticleCard({
@@ -31,7 +31,9 @@ export function ArticleCard({
   const hoursUntilExpiry = differenceInHours(expiryDate, new Date());
   const isExpiringSoon = !article.isSaved && hoursUntilExpiry <= 24 && hoursUntilExpiry > 0;
 
-  const linkHref = article.url;
+  const linkHref = article.cacheFilename
+    ? `/api/cached_articles/${article.cacheFilename}`
+    : article.url;
 
   const pubLabel = PUB_LABEL[article.publisher] ?? article.publisher.toUpperCase();
   const pubColor = PUB_COLOR[article.publisher] ?? "#666";

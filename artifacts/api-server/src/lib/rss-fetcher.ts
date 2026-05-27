@@ -2,51 +2,81 @@ import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import Parser from "rss-parser";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { db, articlesTable } from "@workspace/db";
 import { lt, and, eq } from "drizzle-orm";
 import { logger } from "./logger.js";
 
+const execFileAsync = promisify(execFile);
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const CACHE_DIR = path.resolve(__dirname, "../../../../cached_articles");
+// process.cwd() = artifacts/api-server/ (where the server is started from)
+// Go up two levels to reach the workspace root
+const WORKSPACE_ROOT = path.resolve(process.cwd(), "../..");
+const CACHE_DIR = path.join(WORKSPACE_ROOT, "cached_articles");
+const SCRAPER_SCRIPT = path.join(WORKSPACE_ROOT, "scripts", "scraper.py");
+const PARSE_SCRIPT = path.join(WORKSPACE_ROOT, "scripts", "parse_articles.py");
 
 // ── Sources ──────────────────────────────────────────────────────────────────
-// Google News RSS feeds — always publicly accessible, no API key required.
-// The "site:" operator ensures results link to the real publication.
-// A fallback URL is tried if the primary fails (e.g. Google throttle).
+// Fetched directly from publisher homepages — no intermediary.
+// articleUrlPattern is a regex matched against each href to identify articles.
 const SOURCES = [
   {
-    publisher: "SF Chronicle",
-    rssUrl:
-      "https://news.google.com/rss/search?q=site:sfchronicle.com&hl=en-US&gl=US&ceid=US:en",
-    rssUrlFallback:
-      "https://news.google.com/rss/search?q=san+francisco+chronicle&hl=en-US&gl=US&ceid=US:en",
+    publisher: "Press Democrat",
+    homepageUrl: "https://www.pressdemocrat.com/",
+    // Articles follow the pattern /YYYY/MM/DD/slug/
+    articleUrlPattern: "pressdemocrat\\.com/\\d{4}/\\d{2}/\\d{2}/[^/?#]{5,}",
   },
   {
-    publisher: "The Press Democrat",
-    rssUrl:
-      "https://news.google.com/rss/search?q=site:pressdemocrat.com&hl=en-US&gl=US&ceid=US:en",
-    rssUrlFallback:
-      "https://news.google.com/rss/search?q=press+democrat+santa+rosa&hl=en-US&gl=US&ceid=US:en",
+    publisher: "Mission Local",
+    homepageUrl: "https://missionlocal.org/",
+    // Articles: /YYYY/MM/slug/
+    articleUrlPattern: "missionlocal\\.org/\\d{4}/\\d{2}/[^/?#]{5,}",
   },
 ];
 
-// ── Stealth headers for RSS parser ────────────────────────────────────────────
-const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14.4; rv:125.0) Gecko/20100101 Firefox/125.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+// ── Paywall / challenge-page heuristics ───────────────────────────────────────
+const PAYWALL_PATTERNS = [
+  /subscribe to continue/i,
+  /create a free account/i,
+  /sign in to read/i,
+  /this content is for subscribers/i,
+  /access denied/i,
+  /enable javascript/i,
+  /just a moment/i,
+  /checking your browser/i,
+  /please turn javascript on/i,
+  /client challenge/i,
 ];
 
-function randomUA(): string {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+function looksLikeBlockPage(html: string): boolean {
+  if (html.length < 1500) return true;
+  const snippet = html.slice(0, 6000).toLowerCase();
+  return PAYWALL_PATTERNS.some((re) => re.test(snippet));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+function sanitizeFilename(title: string): string {
+  return (
+    title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .substring(0, 80) +
+    "-" +
+    Date.now() +
+    ".html"
+  );
+}
+
+function randomDelay(minMs = 800, maxMs = 2500): Promise<void> {
+  const ms = Math.floor(Math.random() * (maxMs - minMs)) + minMs;
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function ensureCacheDir() {
   if (!fs.existsSync(CACHE_DIR)) {
     await fsPromises.mkdir(CACHE_DIR, { recursive: true });
@@ -89,60 +119,95 @@ export async function purgeOldArticles(): Promise<number> {
   return purgedCount;
 }
 
-// Strip HTML tags from RSS description snippets (Google News wraps them in <a> tags)
-function stripHtml(raw: string): string {
-  return raw.replace(/<[^>]+>/g, "").trim();
+// ── Step 1: Get article list from publisher homepage ──────────────────────────
+interface ArticleLink {
+  url: string;
+  headline: string;
 }
 
-// Extract a clean description from a RSS item, removing author/byline boilerplate
-function extractDescription(item: Parser.Item): string | null {
-  const raw =
-    (item as Record<string, unknown>)["content:encoded"] as string | undefined
-    ?? item.contentSnippet
-    ?? item.content
-    ?? item.summary
-    ?? null;
+async function fetchArticleList(
+  homepageUrl: string,
+  urlPattern: string,
+  publisher: string,
+): Promise<ArticleLink[]> {
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      "python3",
+      [PARSE_SCRIPT, homepageUrl, urlPattern],
+      { maxBuffer: 20 * 1024 * 1024, timeout: 35000 },
+    );
 
-  if (!raw) return null;
-
-  const text = stripHtml(raw).trim();
-  if (!text || text.length < 10) return null;
-
-  // Google News descriptions are usually "<headline> - Publisher Name"
-  // Strip the trailing " - Publisher" suffix if it looks like that pattern
-  const cleaned = text.replace(/\s*[-–]\s*[A-Z][^-–]{3,40}$/, "").trim();
-  return cleaned || null;
-}
-
-// ── RSS parsing with retry ─────────────────────────────────────────────────────
-async function parseRssFeed(
-  parser: Parser,
-  feedUrl: string,
-  retries = 2,
-): Promise<Parser.Item[]> {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const parsed = await parser.parseURL(feedUrl);
-      const items = parsed.items ?? [];
-      logger.info({ feedUrl, count: items.length, attempt }, "RSS parsed");
-      return items;
-    } catch (err: unknown) {
-      const isRateLimit =
-        err instanceof Error &&
-        (err.message.includes("429") || err.message.includes("Too Many Requests"));
-
-      if (isRateLimit) {
-        logger.warn({ feedUrl, attempt }, "RSS rate-limited (429) — waiting before retry");
-        await new Promise((r) => setTimeout(r, 5000 * (attempt + 1)));
-      } else if (attempt < retries) {
-        logger.warn({ err, feedUrl, attempt }, "RSS parse failed — retrying");
-        await new Promise((r) => setTimeout(r, 1500));
-      } else {
-        logger.warn({ err, feedUrl }, "RSS parse failed after all retries");
-      }
+    if (stderr?.trim()) {
+      logger.warn({ publisher, stderr: stderr.trim() }, "parse_articles stderr");
     }
+
+    const parsed = JSON.parse(stdout || "[]");
+    if (!Array.isArray(parsed)) {
+      logger.warn({ publisher, parsed }, "parse_articles returned non-array");
+      return [];
+    }
+
+    logger.info({ publisher, count: parsed.length }, "Article list fetched from homepage");
+    return parsed as ArticleLink[];
+  } catch (err) {
+    logger.warn({ err, publisher, homepageUrl }, "Failed to fetch article list");
+    return [];
   }
-  return [];
+}
+
+// ── Step 2: Fetch and cache HTML for a single article ─────────────────────────
+async function fetchArticleHtml(
+  articleUrl: string,
+  headline: string,
+  homepageUrl: string,
+): Promise<{ cachePath: string; cacheFilename: string } | null> {
+  try {
+    // Pass the publisher homepage as referer — helps bypass paywalls
+    const { stdout: html, stderr } = await execFileAsync(
+      "python3",
+      [SCRAPER_SCRIPT, articleUrl, homepageUrl],
+      { maxBuffer: 10 * 1024 * 1024, timeout: 30000 },
+    );
+
+    if (stderr?.trim()) {
+      logger.warn({ url: articleUrl, scraperStderr: stderr.trim() }, "Scraper stderr");
+    }
+
+    if (!html) {
+      logger.warn({ url: articleUrl }, "Scraper returned empty response — skipping");
+      return null;
+    }
+
+    if (looksLikeBlockPage(html)) {
+      logger.warn(
+        { url: articleUrl, htmlLength: html.length },
+        "Response looks like a block/paywall page — skipping cache",
+      );
+      return null;
+    }
+
+    const filename = sanitizeFilename(headline);
+    const filePath = path.join(CACHE_DIR, filename);
+    await fsPromises.writeFile(filePath, html, "utf-8");
+    logger.info({ url: articleUrl, filename }, "Cached article HTML");
+    return { cachePath: filePath, cacheFilename: filename };
+  } catch (err: unknown) {
+    const isTimeout =
+      err instanceof Error && err.message.toLowerCase().includes("timeout");
+    const exitCode =
+      err instanceof Error && "code" in err && typeof (err as { code?: unknown }).code === "number"
+        ? (err as { code: number }).code
+        : undefined;
+
+    if (isTimeout) {
+      logger.warn({ url: articleUrl }, "Scraper timed out");
+    } else if (exitCode !== undefined) {
+      logger.warn({ url: articleUrl, exitCode }, "Scraper non-zero exit");
+    } else {
+      logger.warn({ err, url: articleUrl }, "Scraper error");
+    }
+    return null;
+  }
 }
 
 // ── Main fetch orchestrator ───────────────────────────────────────────────────
@@ -151,20 +216,8 @@ export async function fetchAndCacheArticles(): Promise<{
   purgedCount: number;
   errors: string[];
 }> {
+  await ensureCacheDir();
   const purgedCount = await purgeOldArticles();
-
-  const rssParser = new Parser({
-    timeout: 18000,
-    headers: {
-      "User-Agent": randomUA(),
-      Accept: "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Cache-Control": "no-cache",
-    },
-    customFields: {
-      item: [["content:encoded", "content:encoded"]],
-    },
-  });
 
   let newCount = 0;
   const errors: string[] = [];
@@ -172,49 +225,28 @@ export async function fetchAndCacheArticles(): Promise<{
   for (const source of SOURCES) {
     logger.info({ publisher: source.publisher }, "Processing source");
 
-    // ── 1. Parse RSS — try primary URL then fallback ──
-    let items: Parser.Item[] = [];
+    // ── 1. Get article list from publisher homepage ──
+    const articles = await fetchArticleList(
+      source.homepageUrl,
+      source.articleUrlPattern,
+      source.publisher,
+    );
 
-    for (const feedUrl of [source.rssUrl, source.rssUrlFallback]) {
-      items = await parseRssFeed(rssParser, feedUrl);
-      if (items.length > 0) break;
-      logger.warn(
-        { publisher: source.publisher, feedUrl },
-        "No items from feed — trying fallback",
-      );
-    }
-
-    if (items.length === 0) {
-      const msg = `No items from any RSS URL for ${source.publisher}`;
+    if (articles.length === 0) {
+      const msg = `No articles found on ${source.publisher} homepage`;
       logger.warn({ publisher: source.publisher }, msg);
       errors.push(msg);
       continue;
     }
 
-    // ── 2. Process each item ──
-    for (const item of items.slice(0, 20)) {
-      // Robust field extraction with fallbacks
-      const url = (item.link ?? item.guid ?? "").trim();
-      const rawHeadline = (item.title ?? item.contentSnippet ?? "Untitled").trim();
-      // Google News appends " - Publisher Name" to every title — strip it
-      const headline = rawHeadline
-        .replace(/\s*[-–]\s*(SF Chronicle|San Francisco Chronicle|The Press Democrat|Press Democrat)\s*$/i, "")
-        .trim() || rawHeadline;
+    // ── 2. Process each article ──
+    for (const { url, headline } of articles.slice(0, 20)) {
+      if (!url || !headline) continue;
 
-      if (!url) {
-        logger.warn({ item }, "RSS item missing URL — skipping");
-        continue;
-      }
-      if (!headline) {
-        logger.warn({ url }, "RSS item missing headline — skipping");
-        continue;
-      }
-
-      // Validate URL shape
       try {
         new URL(url);
       } catch {
-        logger.warn({ url }, "RSS item has malformed URL — skipping");
+        logger.warn({ url }, "Malformed article URL — skipping");
         continue;
       }
 
@@ -227,29 +259,35 @@ export async function fetchAndCacheArticles(): Promise<{
           .limit(1);
         if (existing.length > 0) continue;
       } catch (err) {
-        logger.error({ err, url }, "DB dedup check failed — skipping article");
+        logger.error({ err, url }, "DB dedup check failed — skipping");
         errors.push(`DB error for ${url}`);
         continue;
       }
 
-      // Extract description and publication date from the RSS item itself
-      const description = extractDescription(item);
-      const publishedAt = item.pubDate ? new Date(item.pubDate) : null;
+      // Human-like delay between fetches
+      await randomDelay();
+
+      // Fetch and cache the article HTML
+      const cached = await fetchArticleHtml(url, headline, source.homepageUrl);
 
       try {
         await db.insert(articlesTable).values({
           headline,
           publisher: source.publisher,
           url,
-          description: description ?? null,
-          publishedAt: publishedAt ?? null,
-          cachePath: null,
-          cacheFilename: null,
+          description: null,
+          publishedAt: null,
+          cachePath: cached?.cachePath ?? null,
+          cacheFilename: cached?.cacheFilename ?? null,
           isSaved: false,
         });
         newCount++;
         logger.info(
-          { headline: headline.slice(0, 60), publisher: source.publisher },
+          {
+            headline: headline.slice(0, 60),
+            publisher: source.publisher,
+            cached: !!cached,
+          },
           "Article stored",
         );
       } catch (err: unknown) {

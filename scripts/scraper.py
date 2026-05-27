@@ -5,6 +5,7 @@ Usage:
     python3 scripts/scraper.py <url>
 
 Outputs the fetched HTML to stdout. Exits with code 1 on failure.
+Follows redirects so it works with publisher article pages.
 """
 
 import subprocess
@@ -21,7 +22,7 @@ USER_AGENTS = [
 ]
 
 
-def scrape(url: str) -> str:
+def scrape(url: str, referer: str | None = None) -> str:
     ua = random.choice(USER_AGENTS)
     is_firefox = "Firefox" in ua
 
@@ -34,11 +35,12 @@ def scrape(url: str) -> str:
     cmd = [
         "curl",
         "--silent",
-        "--max-redirs", "0",        # do NOT follow any redirects
-        "--compressed",             # accept gzip/br
+        "--fail",
+        "--location",               # follow redirects to publisher pages
+        "--max-redirs", "10",
+        "--compressed",
         "--max-time", "20",
         "--connect-timeout", "10",
-        "--write-out", "\nHTTP_STATUS:%{http_code}\nFINAL_URL:%{url_effective}",
         "-A", ua,
         "-H", f"Accept: {accept}",
         "-H", "Accept-Language: en-US,en;q=0.9",
@@ -50,37 +52,22 @@ def scrape(url: str) -> str:
         "-H", "Sec-Fetch-Mode: navigate",
         "-H", "Sec-Fetch-Site: none",
         "-H", "Sec-Fetch-User: ?1",
-        url,
     ]
+
+    if referer:
+        cmd += ["-H", f"Referer: {referer}"]
+
+    cmd.append(url)
 
     result = subprocess.run(cmd, capture_output=True, timeout=25)
 
-    raw = result.stdout.decode("utf-8", errors="replace")
-
-    # Extract the appended status/url lines from the body
-    http_status = None
-    final_url = None
-    body_lines = []
-    for line in raw.splitlines():
-        if line.startswith("HTTP_STATUS:"):
-            http_status = line.split(":", 1)[1].strip()
-        elif line.startswith("FINAL_URL:"):
-            final_url = line.split(":", 1)[1].strip()
-        else:
-            body_lines.append(line)
-    html = "\n".join(body_lines)
-
-    print(f"[scraper] status={http_status} url={final_url} body_len={len(html)}", file=sys.stderr)
-    if html:
-        snippet = html[:300].replace("\n", " ")
-        print(f"[scraper] html_preview: {snippet}", file=sys.stderr)
-
-    # curl exits non-zero (code 47) when redirect is refused — that's expected for 3xx responses
-    if result.returncode not in (0, 47):
+    if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"curl exited {result.returncode}: {stderr}")
 
-    if len(html) < 200:
+    html = result.stdout.decode("utf-8", errors="replace")
+
+    if len(html) < 500:
         raise RuntimeError(f"Response too short ({len(html)} bytes) — likely a challenge/block page")
 
     return html
@@ -88,13 +75,14 @@ def scrape(url: str) -> str:
 
 def main():
     if len(sys.argv) < 2:
-        print(json.dumps({"error": "Usage: scraper.py <url>"}), file=sys.stderr)
+        print(json.dumps({"error": "Usage: scraper.py <url> [referer]"}), file=sys.stderr)
         sys.exit(1)
 
     url = sys.argv[1]
+    referer = sys.argv[2] if len(sys.argv) > 2 else None
 
     try:
-        html = scrape(url)
+        html = scrape(url, referer=referer)
         sys.stdout.buffer.write(html.encode("utf-8", errors="replace"))
     except Exception as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)

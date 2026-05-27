@@ -14,7 +14,7 @@ import { ArticleCard } from "@/components/ArticleCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useState } from "react";
 
-const PUBLICATIONS = ["SF Chronicle", "The Press Democrat"] as const;
+const PUBLICATIONS = ["Press Democrat", "Mission Local"] as const;
 type Publication = (typeof PUBLICATIONS)[number];
 type Filter = "all" | Publication | "saved";
 
@@ -97,7 +97,6 @@ export default function Dashboard() {
 
   const handleSave = (id: number) => toggleSave.mutate({ id });
 
-  // Filter articles
   const allArticles: Article[] = articles ?? [];
   const visibleArticles =
     filter === "all"
@@ -106,16 +105,13 @@ export default function Dashboard() {
       ? allArticles.filter((a) => a.isSaved)
       : allArticles.filter((a) => a.publisher === filter);
 
-  // Split for layout
   const leadArticle = visibleArticles[0];
   const sidebarArticles = visibleArticles.slice(1, 4);
   const remainingArticles = visibleArticles.slice(4);
 
-  // For the "more stories" section — split by publisher
-  const chronicleMore = remainingArticles.filter((a) => a.publisher === "SF Chronicle");
-  const pressdemMore = remainingArticles.filter((a) => a.publisher === "The Press Democrat");
+  const pressdemMore = remainingArticles.filter((a) => a.publisher === "Press Democrat");
+  const missionMore = remainingArticles.filter((a) => a.publisher === "Mission Local");
 
-  // Today's date in NYT format
   const today = new Date().toLocaleDateString("en-US", {
     weekday: "long",
     year: "numeric",
@@ -173,7 +169,7 @@ export default function Dashboard() {
       <div className="border-b border-[#e2e2e2] sticky top-0 bg-white z-20">
         <div className="max-w-5xl mx-auto px-4">
           <nav className="flex items-center gap-0 overflow-x-auto">
-            {(["all", "SF Chronicle", "The Press Democrat", "saved"] as const).map((f) => {
+            {(["all", "Press Democrat", "Mission Local", "saved"] as const).map((f) => {
               const label =
                 f === "all"
                   ? "All Stories"
@@ -251,7 +247,6 @@ export default function Dashboard() {
           <>
             <SectionRule label="Top Stories" />
 
-            {/* Lead + Sidebar grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-0">
               {/* Lead article */}
               <div className="md:col-span-2 md:pr-8 md:border-r border-[#e2e2e2] pb-8 md:pb-0">
@@ -285,12 +280,11 @@ export default function Dashboard() {
         {/* ── MORE STORIES by publication ── */}
         {!isArticlesLoading && remainingArticles.length > 0 && (
           <>
-            {/* SF Chronicle section */}
-            {chronicleMore.length > 0 && (
+            {pressdemMore.length > 0 && (
               <>
-                <SectionRule label="More from SF Chronicle" />
+                <SectionRule label="More from The Press Democrat" />
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-0">
-                  {chronicleMore.map((article) => (
+                  {pressdemMore.map((article) => (
                     <div key={article.id} className="md:pr-6">
                       <ArticleCard
                         article={article}
@@ -304,12 +298,11 @@ export default function Dashboard() {
               </>
             )}
 
-            {/* Press Democrat section */}
-            {pressdemMore.length > 0 && (
+            {missionMore.length > 0 && (
               <>
-                <SectionRule label="More from The Press Democrat" />
+                <SectionRule label="More from Mission Local" />
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-0">
-                  {pressdemMore.map((article) => (
+                  {missionMore.map((article) => (
                     <div key={article.id} className="md:pr-6">
                       <ArticleCard
                         article={article}
@@ -345,7 +338,7 @@ export default function Dashboard() {
       {/* ── Footer ── */}
       <footer className="border-t-4 border-[#121212]">
         <div className="max-w-5xl mx-auto px-4 py-6 text-center text-[11px] text-[#888] tracking-wider uppercase">
-          Snapshot · SF Bay Area · Sources: SF Chronicle, The Press Democrat
+          Snapshot · SF Bay Area · Sources: The Press Democrat, Mission Local
         </div>
       </footer>
     </div>
