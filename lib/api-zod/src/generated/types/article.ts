@@ -12,6 +12,10 @@ export interface Article {
   publisher: string;
   url: string;
   /** @nullable */
+  description?: string | null;
+  /** @nullable */
+  publishedAt?: Date | null;
+  /** @nullable */
   cachePath?: string | null;
   /** @nullable */
   cacheFilename?: string | null;

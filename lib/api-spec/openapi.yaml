@@ -120,6 +120,11 @@ components:
           type: string
         url:
           type: string
+        description:
+          type: ["string", "null"]
+        publishedAt:
+          type: ["string", "null"]
+          format: date-time
         cachePath:
           type: ["string", "null"]
         cacheFilename:

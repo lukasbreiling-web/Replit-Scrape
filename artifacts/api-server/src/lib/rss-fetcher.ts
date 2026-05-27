@@ -2,14 +2,10 @@ import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
-import { execFile } from "child_process";
-import { promisify } from "util";
 import Parser from "rss-parser";
 import { db, articlesTable } from "@workspace/db";
 import { lt, and, eq } from "drizzle-orm";
 import { logger } from "./logger.js";
-
-const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,45 +46,7 @@ function randomUA(): string {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
-// ── Paywall / challenge-page heuristics ───────────────────────────────────────
-const PAYWALL_PATTERNS = [
-  /subscribe to continue/i,
-  /create a free account/i,
-  /sign in to read/i,
-  /this content is for subscribers/i,
-  /access denied/i,
-  /enable javascript/i,
-  /just a moment/i,             // Cloudflare
-  /checking your browser/i,     // Cloudflare / DDoS-GUARD
-  /please turn javascript on/i,
-];
-
-function looksLikeBlockPage(html: string): boolean {
-  if (html.length < 1500) return true;
-  const snippet = html.slice(0, 6000).toLowerCase();
-  return PAYWALL_PATTERNS.some((re) => re.test(snippet));
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function sanitizeFilename(title: string): string {
-  return (
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .substring(0, 80) +
-    "-" +
-    Date.now() +
-    ".html"
-  );
-}
-
-// Randomized delay: 600ms–2000ms between requests (reduced to not slow scrapes too much)
-function randomDelay(minMs = 600, maxMs = 2000): Promise<void> {
-  const ms = Math.floor(Math.random() * (maxMs - minMs)) + minMs;
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export async function ensureCacheDir() {
   if (!fs.existsSync(CACHE_DIR)) {
     await fsPromises.mkdir(CACHE_DIR, { recursive: true });
@@ -97,7 +55,6 @@ export async function ensureCacheDir() {
 
 // ── Purge ─────────────────────────────────────────────────────────────────────
 export async function purgeOldArticles(): Promise<number> {
-  await ensureCacheDir();
   const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
 
   const oldArticles = await db
@@ -132,64 +89,29 @@ export async function purgeOldArticles(): Promise<number> {
   return purgedCount;
 }
 
-// Path to the Python curl-based scraper script
-const SCRAPER_SCRIPT = path.resolve(__dirname, "../../../../scripts/scraper.py");
+// Strip HTML tags from RSS description snippets (Google News wraps them in <a> tags)
+function stripHtml(raw: string): string {
+  return raw.replace(/<[^>]+>/g, "").trim();
+}
 
-// ── Fetch one article's HTML via the Python/curl scraper ─────────────────────
-// Returns null on any failure — the caller always falls back to the RSS URL.
-async function fetchArticleHtml(
-  articleUrl: string,
-  headline: string,
-): Promise<{ cachePath: string; cacheFilename: string } | null> {
-  try {
-    const { stdout: html, stderr } = await execFileAsync(
-      "python3",
-      [SCRAPER_SCRIPT, articleUrl],
-      { maxBuffer: 10 * 1024 * 1024, timeout: 30000 },
-    );
+// Extract a clean description from a RSS item, removing author/byline boilerplate
+function extractDescription(item: Parser.Item): string | null {
+  const raw =
+    (item as Record<string, unknown>)["content:encoded"] as string | undefined
+    ?? item.contentSnippet
+    ?? item.content
+    ?? item.summary
+    ?? null;
 
-    if (stderr?.trim()) {
-      // scraper.py writes JSON error objects to stderr — log them for diagnosis
-      logger.warn({ url: articleUrl, scraperStderr: stderr.trim() }, "Scraper stderr");
-    }
+  if (!raw) return null;
 
-    if (!html) {
-      logger.warn({ url: articleUrl }, "Scraper returned empty response — skipping cache");
-      return null;
-    }
+  const text = stripHtml(raw).trim();
+  if (!text || text.length < 10) return null;
 
-    if (looksLikeBlockPage(html)) {
-      logger.warn(
-        { url: articleUrl, htmlLength: html.length },
-        "Response looks like a block/paywall page — skipping cache",
-      );
-      return null;
-    }
-
-    const filename = sanitizeFilename(headline);
-    const filePath = path.join(CACHE_DIR, filename);
-    await fsPromises.writeFile(filePath, html, "utf-8");
-    logger.info({ url: articleUrl, filename }, "Cached article HTML");
-    return { cachePath: filePath, cacheFilename: filename };
-  } catch (err: unknown) {
-    const isTimeout =
-      err instanceof Error && err.message.toLowerCase().includes("timeout");
-    const isExitError =
-      err instanceof Error && "code" in err && typeof (err as { code?: unknown }).code === "number";
-    const exitCode = isExitError ? (err as { code: number }).code : undefined;
-
-    if (isTimeout) {
-      logger.warn({ url: articleUrl }, "Scraper timed out — falling back to RSS URL");
-    } else if (exitCode !== undefined) {
-      logger.warn(
-        { url: articleUrl, exitCode },
-        "Scraper exited with non-zero code — falling back to RSS URL",
-      );
-    } else {
-      logger.warn({ err, url: articleUrl }, "Scraper error — falling back to RSS URL");
-    }
-    return null;
-  }
+  // Google News descriptions are usually "<headline> - Publisher Name"
+  // Strip the trailing " - Publisher" suffix if it looks like that pattern
+  const cleaned = text.replace(/\s*[-–]\s*[A-Z][^-–]{3,40}$/, "").trim();
+  return cleaned || null;
 }
 
 // ── RSS parsing with retry ─────────────────────────────────────────────────────
@@ -229,7 +151,6 @@ export async function fetchAndCacheArticles(): Promise<{
   purgedCount: number;
   errors: string[];
 }> {
-  await ensureCacheDir();
   const purgedCount = await purgeOldArticles();
 
   const rssParser = new Parser({
@@ -239,6 +160,9 @@ export async function fetchAndCacheArticles(): Promise<{
       Accept: "application/rss+xml,application/xml,text/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
       "Cache-Control": "no-cache",
+    },
+    customFields: {
+      item: [["content:encoded", "content:encoded"]],
     },
   });
 
@@ -271,7 +195,11 @@ export async function fetchAndCacheArticles(): Promise<{
     for (const item of items.slice(0, 20)) {
       // Robust field extraction with fallbacks
       const url = (item.link ?? item.guid ?? "").trim();
-      const headline = (item.title ?? item.contentSnippet ?? "Untitled").trim();
+      const rawHeadline = (item.title ?? item.contentSnippet ?? "Untitled").trim();
+      // Google News appends " - Publisher Name" to every title — strip it
+      const headline = rawHeadline
+        .replace(/\s*[-–]\s*(SF Chronicle|San Francisco Chronicle|The Press Democrat|Press Democrat)\s*$/i, "")
+        .trim() || rawHeadline;
 
       if (!url) {
         logger.warn({ item }, "RSS item missing URL — skipping");
@@ -304,24 +232,24 @@ export async function fetchAndCacheArticles(): Promise<{
         continue;
       }
 
-      // Human-like delay before each HTML fetch
-      await randomDelay();
-
-      // Try to cache full HTML; gracefully fall back to null if blocked/failed
-      const cached = await fetchArticleHtml(url, headline);
+      // Extract description and publication date from the RSS item itself
+      const description = extractDescription(item);
+      const publishedAt = item.pubDate ? new Date(item.pubDate) : null;
 
       try {
         await db.insert(articlesTable).values({
           headline,
           publisher: source.publisher,
           url,
-          cachePath: cached?.cachePath ?? null,
-          cacheFilename: cached?.cacheFilename ?? null,
+          description: description ?? null,
+          publishedAt: publishedAt ?? null,
+          cachePath: null,
+          cacheFilename: null,
           isSaved: false,
         });
         newCount++;
         logger.info(
-          { headline: headline.slice(0, 60), publisher: source.publisher, cached: !!cached },
+          { headline: headline.slice(0, 60), publisher: source.publisher },
           "Article stored",
         );
       } catch (err: unknown) {

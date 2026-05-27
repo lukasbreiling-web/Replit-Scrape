@@ -25,15 +25,13 @@ export function ArticleCard({
   isSaving,
   variant = "grid",
 }: ArticleCardProps) {
-  const fetchedDate = new Date(article.fetchedAt);
-  const timeAgo = formatDistanceToNow(fetchedDate, { addSuffix: true });
-  const expiryDate = new Date(fetchedDate.getTime() + 3 * 24 * 60 * 60 * 1000);
+  const displayDate = article.publishedAt ? new Date(article.publishedAt) : new Date(article.fetchedAt);
+  const timeAgo = formatDistanceToNow(displayDate, { addSuffix: true });
+  const expiryDate = new Date(new Date(article.fetchedAt).getTime() + 3 * 24 * 60 * 60 * 1000);
   const hoursUntilExpiry = differenceInHours(expiryDate, new Date());
   const isExpiringSoon = !article.isSaved && hoursUntilExpiry <= 24 && hoursUntilExpiry > 0;
 
-  const linkHref = article.cacheFilename
-    ? `/api/cached_articles/${article.cacheFilename}`
-    : article.url;
+  const linkHref = article.url;
 
   const pubLabel = PUB_LABEL[article.publisher] ?? article.publisher.toUpperCase();
   const pubColor = PUB_COLOR[article.publisher] ?? "#666";
@@ -67,6 +65,13 @@ export function ArticleCard({
         >
           {article.headline}
         </a>
+
+        {/* Description */}
+        {article.description && (
+          <p className="text-[0.95rem] leading-[1.5] text-[#333] line-clamp-3">
+            {article.description}
+          </p>
+        )}
 
         {/* Meta */}
         <div className="flex items-center justify-between pt-1 border-t border-[#e2e2e2]">

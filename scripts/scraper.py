@@ -34,12 +34,11 @@ def scrape(url: str) -> str:
     cmd = [
         "curl",
         "--silent",
-        "--fail",
-        "--location",               # follow redirects
-        "--max-redirs", "10",
+        "--max-redirs", "0",        # do NOT follow any redirects
         "--compressed",             # accept gzip/br
         "--max-time", "20",
         "--connect-timeout", "10",
+        "--write-out", "\nHTTP_STATUS:%{http_code}\nFINAL_URL:%{url_effective}",
         "-A", ua,
         "-H", f"Accept: {accept}",
         "-H", "Accept-Language: en-US,en;q=0.9",
@@ -56,13 +55,32 @@ def scrape(url: str) -> str:
 
     result = subprocess.run(cmd, capture_output=True, timeout=25)
 
-    if result.returncode != 0:
+    raw = result.stdout.decode("utf-8", errors="replace")
+
+    # Extract the appended status/url lines from the body
+    http_status = None
+    final_url = None
+    body_lines = []
+    for line in raw.splitlines():
+        if line.startswith("HTTP_STATUS:"):
+            http_status = line.split(":", 1)[1].strip()
+        elif line.startswith("FINAL_URL:"):
+            final_url = line.split(":", 1)[1].strip()
+        else:
+            body_lines.append(line)
+    html = "\n".join(body_lines)
+
+    print(f"[scraper] status={http_status} url={final_url} body_len={len(html)}", file=sys.stderr)
+    if html:
+        snippet = html[:300].replace("\n", " ")
+        print(f"[scraper] html_preview: {snippet}", file=sys.stderr)
+
+    # curl exits non-zero (code 47) when redirect is refused — that's expected for 3xx responses
+    if result.returncode not in (0, 47):
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
         raise RuntimeError(f"curl exited {result.returncode}: {stderr}")
 
-    html = result.stdout.decode("utf-8", errors="replace")
-
-    if len(html) < 500:
+    if len(html) < 200:
         raise RuntimeError(f"Response too short ({len(html)} bytes) — likely a challenge/block page")
 
     return html

@@ -7,6 +7,8 @@ export const articlesTable = pgTable("articles", {
   headline: text("headline").notNull(),
   publisher: text("publisher").notNull(),
   url: text("url").notNull().unique(),
+  description: text("description"),
+  publishedAt: timestamp("published_at"),
   cachePath: text("cache_path"),
   cacheFilename: text("cache_filename"),
   fetchedAt: timestamp("fetched_at").defaultNow().notNull(),

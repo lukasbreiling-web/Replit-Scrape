@@ -19,7 +19,7 @@ router.get("/articles", async (req, res) => {
   const articles = await db
     .select()
     .from(articlesTable)
-    .orderBy(desc(articlesTable.fetchedAt));
+    .orderBy(desc(articlesTable.publishedAt), desc(articlesTable.fetchedAt));
   res.json(articles);
 });
 
